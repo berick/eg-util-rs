@@ -135,6 +135,7 @@ fn create_sql(ops: &ExportOptions) -> String {
 }
 
 fn export(con: &mut DatabaseConnection, ops: &ExportOptions) -> Result<(), String> {
+
     // Where are we spewing bytes?
     let mut writer: Box<dyn Write> = match &ops.destination {
         ExportDestination::File(fname) => Box::new(fs::File::create(fname).unwrap()),
@@ -158,10 +159,10 @@ fn export(con: &mut DatabaseConnection, ops: &ExportOptions) -> Result<(), Strin
             continue;
         }
 
-        let record = Record::from_xml(&marc_xml).next().unwrap();
-        let binary = record.to_binary().unwrap();
-
-        write(&mut writer, &binary)?;
+        if let Some(record) = Record::from_xml(&marc_xml).next() {
+            let binary = record.to_binary()?;
+            write(&mut writer, &binary)?;
+        }
     }
 
     if ops.to_xml {

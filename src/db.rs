@@ -1,7 +1,7 @@
 ///! Create, connect, and manage database connections.
-use getopts;
-use postgres::{Client, NoTls};
 use std::env;
+use getopts;
+use postgres as pg;
 
 const DEFAULT_DB_PORT: u16 = 5432;
 const DEFAULT_DB_HOST: &str = "localhost";
@@ -17,11 +17,13 @@ const DEFAULT_DB_NAME: &str = "evergreen";
 /// 3. Values pulled from the environment (e.g. PGHOST) where possible.
 /// 4. Default values defined in this module.
 pub struct DatabaseConnectionBuilder {
-    client: Option<Client>,
+    client: Option<pg::Client>,
     host: Option<String>,
     port: Option<u16>,
     user: Option<String>,
-    name: Option<String>,
+    database: Option<String>,
+    // Name of client application.
+    application: Option<String>,
 }
 
 impl DatabaseConnectionBuilder {
@@ -30,7 +32,8 @@ impl DatabaseConnectionBuilder {
             host: None,
             port: None,
             user: None,
-            name: None,
+            database: None,
+            application: None,
             client: None,
         }
     }
@@ -59,9 +62,9 @@ impl DatabaseConnectionBuilder {
             }
         }
 
-        if self.name.is_none() {
+        if self.database.is_none() {
             if params.opt_defined("db-name") {
-                self.name = params.opt_str("db-name");
+                self.database = params.opt_str("db-name");
             }
         }
 
@@ -86,8 +89,12 @@ impl DatabaseConnectionBuilder {
         self.user = Some(user.to_string());
     }
 
-    pub fn set_name(&mut self, name: &str) {
-        self.name = Some(name.to_string());
+    pub fn set_database(&mut self, database: &str) {
+        self.database = Some(database.to_string());
+    }
+
+    pub fn set_application(&mut self, application: &str) {
+        self.application = Some(application.to_string());
     }
 
     fn from_env(name: &str) -> Option<String> {
@@ -116,7 +123,7 @@ impl DatabaseConnectionBuilder {
             },
         };
 
-        let name = match self.name {
+        let database = match self.database {
             Some(h) => h,
             None => match DatabaseConnectionBuilder::from_env("PGDATABASE") {
                 Some(h) => h,
@@ -132,14 +139,20 @@ impl DatabaseConnectionBuilder {
             },
         };
 
-        let dsn = format!("host={} port={} user={} dbname={}", host, port, user, name);
+        let mut dsn = format!(
+            "host={} port={} user={} dbname={}", host, port, user, database);
+
+        if let Some(ref app) = self.application {
+            dsn += &format!(" application={}", &app);
+        }
 
         DatabaseConnection {
             host,
             port,
             user,
-            name,
             dsn,
+            database,
+            application: self.application,
             client: None,
         }
     }
@@ -147,12 +160,13 @@ impl DatabaseConnectionBuilder {
 
 /// Wrapper for a postgres::Client with connection metadata.
 pub struct DatabaseConnection {
-    client: Option<Client>,
+    client: Option<pg::Client>,
     dsn: String,
     host: String,
     port: u16,
     user: String,
-    name: String,
+    database: String,
+    application: Option<String>,
 }
 
 impl DatabaseConnection {
@@ -168,7 +182,7 @@ impl DatabaseConnection {
     /// Mutable client ref
     ///
     /// Panics if the client is not yet connected / created.
-    pub fn client(&mut self) -> &mut Client {
+    pub fn client(&mut self) -> &mut pg::Client {
         self.client.as_mut().unwrap()
     }
 
@@ -176,7 +190,7 @@ impl DatabaseConnection {
     ///
     /// Non-TLS connections only supported at present.
     pub fn connect(&mut self) -> Result<(), String> {
-        match Client::connect(self.dsn(), NoTls) {
+        match pg::Client::connect(self.dsn(), pg::NoTls) {
             Ok(c) => {
                 self.client = Some(c);
                 Ok(())

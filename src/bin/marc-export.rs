@@ -4,9 +4,13 @@ use marcutil::Record;
 use std::io::prelude::*;
 use std::{env, fs, io};
 
+const XML_COLLECTION_HEADER: &str = r#"<collection xmlns="http://www.loc.gov/MARC21/slim">"#;
+const XML_COLLECTION_FOOTER: &str = "</collection>";
+
 struct ExportOptions {
     min_id: i64,
     max_id: i64,
+    to_xml: bool,
     newest_first: bool,
     destination: ExportDestination,
     query_file: Option<String>,
@@ -29,8 +33,9 @@ fn read_options() -> Option<(ExportOptions, DatabaseConnection)> {
     opts.optopt("", "min-id", "Minimum record ID", "MIN_REC_ID");
     opts.optopt("", "max-id", "Maximum record ID", "MAX_REC_ID");
     opts.optopt("", "out-file", "Output File", "OUTPUT_FILE");
-    opts.optopt("", "query-file", "SQL Query File", "query_file");
+    opts.optopt("", "query-file", "SQL Query File", "QUERY_FILE");
 
+    opts.optflag("", "to-xml", "Export to XML");
     opts.optflag("", "newest-first", "Newest First");
     opts.optflag("h", "help", "Help");
 
@@ -56,6 +61,7 @@ fn read_options() -> Option<(ExportOptions, DatabaseConnection)> {
             min_id: params.opt_get_default("min-id", -1).unwrap(),
             max_id: params.opt_get_default("max-id", -1).unwrap(),
             newest_first: params.opt_present("newest-first"),
+            to_xml: params.opt_present("to-xml"),
             query_file: params.opt_get("query-file").unwrap(),
         },
         connection,
@@ -90,6 +96,13 @@ Options
         Export records newest to oldest by create date.
         Otherwise, export oldests to newest.
 
+    --db-host
+    --db-port
+    --db-user
+    --db-name
+        Database connection options.  PG environment vars are used
+        as defaults when available.
+
     --help Print help message
 
     "#
@@ -122,6 +135,7 @@ fn create_sql(ops: &ExportOptions) -> String {
 }
 
 fn export(con: &mut DatabaseConnection, ops: &ExportOptions) -> Result<(), String> {
+    // Where are we spewing bytes?
     let mut writer: Box<dyn Write> = match &ops.destination {
         ExportDestination::File(fname) => Box::new(fs::File::create(fname).unwrap()),
         _ => Box::new(io::stdout()),
@@ -131,18 +145,39 @@ fn export(con: &mut DatabaseConnection, ops: &ExportOptions) -> Result<(), Strin
 
     let query = create_sql(ops);
 
+    if ops.to_xml {
+        write(&mut writer, &XML_COLLECTION_HEADER.as_bytes())?;
+    }
+
     for row in con.client().query(&query[..], &[]).unwrap() {
         let marc_xml: &str = row.get("marc");
+
+        if ops.to_xml {
+            // No need to parse the record if we going XML to XML.
+            write(&mut writer, &marc_xml.as_bytes())?;
+            continue;
+        }
 
         let record = Record::from_xml(&marc_xml).next().unwrap();
         let binary = record.to_binary().unwrap();
 
-        writer.write(&binary).unwrap();
+        write(&mut writer, &binary)?;
+    }
+
+    if ops.to_xml {
+        write(&mut writer, &XML_COLLECTION_FOOTER.as_bytes())?;
     }
 
     con.disconnect();
 
     Ok(())
+}
+
+fn write(writer: &mut Box<dyn Write>, bytes: &[u8]) -> Result<(), String> {
+    match writer.write(bytes) {
+        Ok(_) => Ok(()),
+        Err(e) => Err(format!("Error writing bytes: {e}")),
+    }
 }
 
 fn main() -> Result<(), String> {

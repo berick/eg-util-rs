@@ -25,7 +25,6 @@ pub struct DatabaseConnectionBuilder {
 }
 
 impl DatabaseConnectionBuilder {
-
     pub fn new() -> Self {
         DatabaseConnectionBuilder {
             host: None,
@@ -48,7 +47,6 @@ impl DatabaseConnectionBuilder {
     ///     --db-user
     ///     --db-name
     pub fn set_opts(&mut self, params: &getopts::Matches) {
-
         if self.host.is_none() {
             if params.opt_defined("db-host") {
                 self.host = params.opt_str("db-host");
@@ -158,7 +156,6 @@ pub struct DatabaseConnection {
 }
 
 impl DatabaseConnection {
-
     pub fn builder() -> DatabaseConnectionBuilder {
         DatabaseConnectionBuilder::new()
     }

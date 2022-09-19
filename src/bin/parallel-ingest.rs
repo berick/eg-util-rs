@@ -5,7 +5,7 @@ use std::env;
 use std::thread;
 use threadpool::ThreadPool;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct IngestOptions {
     max_threads: u8,
     do_browse: bool,
@@ -17,6 +17,7 @@ struct IngestOptions {
     max_id: usize,
     newest_first: bool,
     batch_size: usize,
+    attrs: Vec<String>,
 }
 
 /// Read command line options and setup our database connection.
@@ -38,6 +39,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     );
     opts.optopt("", "min-id", "Minimum Record ID", "MIN_REC_ID");
     opts.optopt("", "max-id", "Maximum Record ID", "MAX_REC_ID");
+    opts.optmulti("", "attr", "Reingest Specific Attribute, Repetable", "RECORD_ATTR");
 
     opts.optflag("h", "help", "Show Help Text");
     opts.optflag("", "do-browse", "Update Browse");
@@ -72,6 +74,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
         max_id: params.opt_get_default("max-id", 0).unwrap(),
         newest_first: params.opt_present("newest-first"),
         batch_size: params.opt_get_default("batch-size", 100).unwrap(),
+        attrs: params.opt_strs("attr"),
     };
 
     let mut builder = DatabaseConnection::builder();
@@ -158,17 +161,43 @@ fn reingest_attributes(
         ids.len()
     );
 
-    let sql = r#"
+    let mut sql = r#"
         SELECT metabib.reingest_record_attributes($1)
         FROM biblio.record_entry
         WHERE id = $2
     "#;
 
-    let stmt = connection.client().prepare(sql).unwrap();
+    if options.attrs.len() > 0 {
 
-    for id in ids {
-        if let Err(e) = connection.client().query(&stmt, &[id, id]) {
-            error!("Error processing record: {id} {e}");
+        let sql = r#"
+            SELECT metabib.reingest_record_attributes($1, $3)
+            FROM biblio.record_entry
+            WHERE id = $2
+        "#;
+
+        let stmt = connection.client().prepare(sql).unwrap();
+
+        for id in ids {
+            if let Err(e) =
+                connection.client().query(&stmt, &[id, id, &options.attrs.as_slice()]) {
+                error!("Error processing record: {id} {e}");
+            }
+        }
+
+    } else {
+
+        let sql = r#"
+            SELECT metabib.reingest_record_attributes($1)
+            FROM biblio.record_entry
+            WHERE id = $2
+        "#;
+
+        let stmt = connection.client().prepare(sql).unwrap();
+
+        for id in ids {
+            if let Err(e) = connection.client().query(&stmt, &[id, id]) {
+                error!("Error processing record: {id} {e}");
+            }
         }
     }
 }

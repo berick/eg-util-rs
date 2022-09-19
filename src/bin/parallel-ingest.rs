@@ -1,7 +1,8 @@
 use egutil::db::DatabaseConnection;
 use getopts::Options;
-use log::{error, info};
+use log::{debug, error, info};
 use std::env;
+use std::thread;
 use threadpool::ThreadPool;
 
 #[derive(Debug, Clone, Copy)]
@@ -20,7 +21,6 @@ struct IngestOptions {
 
 /// Read command line options and setup our database connection.
 fn init() -> Option<(IngestOptions, DatabaseConnection)> {
-
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
@@ -112,13 +112,14 @@ fn get_record_ids(connection: &mut DatabaseConnection, sql: &str) -> Vec<i64> {
     ids
 }
 
-fn ingest_records(options: &IngestOptions,
-    connection: &mut DatabaseConnection, ids: &mut Vec<i64>) {
-
+fn ingest_records(
+    options: &IngestOptions,
+    connection: &mut DatabaseConnection,
+    ids: &mut Vec<i64>,
+) {
     let pool = ThreadPool::new(options.max_threads as usize);
 
     loop {
-
         let end = match ids.len() {
             0 => break,
             n if n >= options.batch_size => options.batch_size,
@@ -129,18 +130,48 @@ fn ingest_records(options: &IngestOptions,
         let batch: Vec<i64> = ids.drain(0..end).collect();
 
         let ops = options.clone();
+        let mut con = connection.partial_clone();
 
-        pool.execute(move || process_batch(ops, batch));
+        pool.execute(move || process_batch(ops, con, batch));
     }
 
     pool.join();
 }
 
-fn process_batch(options: IngestOptions, ids: Vec<i64>) {
+/// Start point for our threads
+fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids: Vec<i64>) {
+    connection.connect().unwrap();
 
-
+    if options.do_attrs {
+        reingest_attributes(&options, &mut connection, &ids);
+    }
 }
 
+fn reingest_attributes(
+    options: &IngestOptions,
+    connection: &mut DatabaseConnection,
+    ids: &Vec<i64>,
+) {
+    info!(
+        "Thread {:?} processing {} records",
+        thread::current().id(),
+        ids.len()
+    );
+
+    let sql = r#"
+        SELECT metabib.reingest_record_attributes($1)
+        FROM biblio.record_entry
+        WHERE id = $2
+    "#;
+
+    let stmt = connection.client().prepare(sql).unwrap();
+
+    for id in ids {
+        if let Err(e) = connection.client().query(&stmt, &[id, id]) {
+            error!("Error processing record: {id} {e}");
+        }
+    }
+}
 
 fn main() {
     env_logger::init();

@@ -208,4 +208,20 @@ impl DatabaseConnection {
     pub fn disconnect(&mut self) {
         self.client = None;
     }
+
+    /// Clones the connection, minus the acutal PG Client.
+    pub fn partial_clone(&self) -> DatabaseConnection {
+        DatabaseConnection {
+            client: None,
+            dsn: self.dsn.to_string(),
+            host: self.host.to_string(),
+            port: self.port,
+            user: self.user.to_string(),
+            database: self.database.to_string(),
+            application: match &self.application {
+                Some(a) => Some(a.to_string()),
+                None => None,
+            },
+        }
+    }
 }

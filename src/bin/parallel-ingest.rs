@@ -4,6 +4,7 @@ use log::{error, info};
 use std::env;
 use threadpool::ThreadPool;
 
+#[derive(Debug, Clone, Copy)]
 struct IngestOptions {
     max_threads: u8,
     do_browse: bool,
@@ -19,6 +20,7 @@ struct IngestOptions {
 
 /// Read command line options and setup our database connection.
 fn init() -> Option<(IngestOptions, DatabaseConnection)> {
+
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
@@ -110,13 +112,51 @@ fn get_record_ids(connection: &mut DatabaseConnection, sql: &str) -> Vec<i64> {
     ids
 }
 
+fn ingest_records(options: &IngestOptions,
+    connection: &mut DatabaseConnection, ids: &mut Vec<i64>) {
+
+    let pool = ThreadPool::new(options.max_threads as usize);
+
+    loop {
+
+        let end = match ids.len() {
+            0 => break,
+            n if n >= options.batch_size => options.batch_size,
+            _ => ids.len(),
+        };
+
+        // Always pull from index 0 since we are draining the Vec each time.
+        let batch: Vec<i64> = ids.drain(0..end).collect();
+
+        let ops = options.clone();
+
+        pool.execute(move || process_batch(ops, batch));
+    }
+
+    pool.join();
+}
+
+fn process_batch(options: IngestOptions, ids: Vec<i64>) {
+
+
+}
+
+
 fn main() {
     env_logger::init();
 
-    if let Some((options, mut connection)) = init() {
-        connection.connect();
+    let (options, mut connection) = match init() {
+        Some((o, c)) => (o, c),
+        None => return,
+    };
 
-        let sql = create_sql(&options);
-        let ids = get_record_ids(&mut connection, &sql);
-    }
+    connection.connect();
+
+    let sql = create_sql(&options);
+    let mut ids = get_record_ids(&mut connection, &sql);
+
+    // Future DB interactions will be per-thread.
+    connection.disconnect();
+
+    ingest_records(&options, &mut connection, &mut ids);
 }

@@ -17,7 +17,6 @@ const DEFAULT_DB_NAME: &str = "evergreen";
 /// 3. Values pulled from the environment (e.g. PGHOST) where possible.
 /// 4. Default values defined in this module.
 pub struct DatabaseConnectionBuilder {
-    client: Option<pg::Client>,
     host: Option<String>,
     port: Option<u16>,
     user: Option<String>,
@@ -34,7 +33,6 @@ impl DatabaseConnectionBuilder {
             user: None,
             database: None,
             application: None,
-            client: None,
         }
     }
 

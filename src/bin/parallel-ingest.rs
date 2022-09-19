@@ -141,13 +141,16 @@ fn ingest_records(
         reingest_browse(options, connection, ids);
     }
 
-    if !options.do_attrs && !options.do_search && !options.do_facets && !options.do_display {
+    if !(options.do_attrs || options.do_search || options.do_facets || options.do_display) {
         return;
     }
 
+    // Remaining actions can be run in parallel
+
     let pool = ThreadPool::new(options.max_threads);
 
-    while ids.len() > 0 {
+    while !ids.is_empty() {
+
         let end = match ids.len() {
             n if n >= options.batch_size => options.batch_size,
             _ => ids.len(),
@@ -176,10 +179,25 @@ fn ingest_records(
 
 /// Start point for our threads
 fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids: Vec<i64>) {
+
+    let idlen = ids.len();
+
+    info!(
+        "{:?} processing {} records: {}..{}",
+        thread::current().id(),
+        &ids[0],
+        &ids[idlen - 1],
+        idlen
+    );
+
     connection.connect().unwrap();
 
     if options.do_attrs {
         reingest_attributes(&options, &mut connection, &ids);
+    }
+
+    if options.do_search || options.do_facets || options.do_display {
+        reingest_field_entries(&options, &mut connection, &ids);
     }
 
     connection.disconnect(); // not strictly necessary
@@ -219,22 +237,43 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
     }
 }
 
+fn reingest_field_entries(
+    options: &IngestOptions,
+    connection: &mut DatabaseConnection,
+    ids: &Vec<i64>,
+) {
+
+    debug!("Batch starting reingest_field_entries()");
+
+    let sql = r#"
+        SELECT metabib.reingest_metabib_field_entries(
+            bib_id := $1,
+            skip_facet := $2,
+            skip_browse := TRUE,
+            skip_search := $3,
+            skip_display := $4
+        )
+    "#;
+
+    let stmt = connection.client().prepare(&sql).unwrap();
+
+    for id in ids {
+        if let Err(e) = connection.client().query(&stmt,
+            &[id, &!options.do_facets, &!options.do_search, &!options.do_display]) {
+            error!("Error processing record: {id} {e}");
+        }
+    }
+}
+
+
 fn reingest_attributes(
     options: &IngestOptions,
     connection: &mut DatabaseConnection,
     ids: &Vec<i64>,
 ) {
-    let idlen = ids.len();
+    debug!("Batch starting reingest_attributes()");
 
-    info!(
-        "{:?} processing {} records: {}..{}",
-        thread::current().id(),
-        &ids[0],
-        &ids[idlen - 1],
-        idlen
-    );
-
-    let has_attr_filter = options.attrs.len() > 0;
+    let has_attr_filter = !options.attrs.is_empty();
 
     let mut sql = r#"
         SELECT metabib.reingest_record_attributes($1)
@@ -277,8 +316,6 @@ fn main() {
 
     let sql = create_sql(&options);
     let mut ids = get_record_ids(&mut connection, &sql);
-
-    //connection.disconnect();
 
     ingest_records(&options, &mut connection, &mut ids);
 }

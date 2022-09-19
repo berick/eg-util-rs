@@ -1,6 +1,7 @@
 use egutil::db::DatabaseConnection;
 use getopts::Options;
 use log::{debug, error, info};
+use postgres as pg;
 use std::env;
 use std::fs;
 use std::thread;
@@ -8,7 +9,7 @@ use threadpool::ThreadPool;
 
 #[derive(Debug, Clone)]
 struct IngestOptions {
-    max_threads: u8,
+    max_threads: usize,
     do_browse: bool,
     do_attrs: bool,
     do_search: bool,
@@ -43,7 +44,12 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     );
     opts.optopt("", "min-id", "Minimum Record ID", "MIN_REC_ID");
     opts.optopt("", "max-id", "Maximum Record ID", "MAX_REC_ID");
-    opts.optmulti("", "attr", "Reingest Specific Attribute, Repetable", "RECORD_ATTR");
+    opts.optmulti(
+        "",
+        "attr",
+        "Reingest Specific Attribute, Repetable",
+        "RECORD_ATTR",
+    );
 
     opts.optflag("h", "help", "Show Help Text");
     opts.optflag("", "do-browse", "Update Browse");
@@ -90,7 +96,6 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
 }
 
 fn create_sql(options: &IngestOptions) -> String {
-
     if let Some(ref fname) = options.sql_file {
         return fs::read_to_string(fname).unwrap();
     }
@@ -102,7 +107,7 @@ fn create_sql(options: &IngestOptions) -> String {
         filter += &format!(" AND id < {}", options.max_id);
     }
 
-    let mut order_by;
+    let order_by;
     if options.newest_first {
         order_by = "ORDER BY create_date DESC, id DESC";
     } else {
@@ -130,11 +135,20 @@ fn ingest_records(
     connection: &mut DatabaseConnection,
     ids: &mut Vec<i64>,
 ) {
-    let pool = ThreadPool::new(options.max_threads as usize);
+    if options.do_browse {
+        // Browse ingest must be serialized and must be the
+        // only game in town while it's running.
+        reingest_browse(options, connection, ids);
+    }
 
-    loop {
+    if !options.do_attrs && !options.do_search && !options.do_facets && !options.do_display {
+        return;
+    }
+
+    let pool = ThreadPool::new(options.max_threads);
+
+    while ids.len() > 0 {
         let end = match ids.len() {
-            0 => break,
             n if n >= options.batch_size => options.batch_size,
             _ => ids.len(),
         };
@@ -143,11 +157,11 @@ fn ingest_records(
         let batch: Vec<i64> = ids.drain(0..end).collect();
 
         let ops = options.clone();
-        let mut con = connection.partial_clone();
+        let con = connection.partial_clone();
 
         pool.execute(move || process_batch(ops, con, batch));
 
-        if pool.queued_count() > options.batch_size {
+        if pool.queued_count() > options.batch_size * 2 {
             // Wait for each batch of batches to complete before
             // moving on to the next.  With this we avoid queueing up
             // huge numbers of pending threads w/ cloned closure data
@@ -171,17 +185,54 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
     connection.disconnect(); // not strictly necessary
 }
 
+/// Reingest browse data for the full record data set.
+///
+/// This occurs in the main thread without any parallelification.
+fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
+    let sql = r#"
+		SELECT metabib.reingest_metabib_field_entries(
+		    bib_id := $1,
+		    skip_browse  := FALSE,
+		    skip_facet   := TRUE,
+		    skip_search  := TRUE,
+		    skip_display := TRUE
+        )
+	"#;
+
+    // We can't create the statement until we are connected.
+    let mut stmt: Option<pg::Statement> = None;
+
+    let mut counter: usize = 0;
+    for id in ids {
+        if counter % options.batch_size == 0 {
+            connection.disconnect();
+            connection.connect().unwrap();
+            stmt = Some(connection.client().prepare(&sql).unwrap());
+            info!("Browse has processed {counter} records");
+        }
+
+        counter += 1;
+
+        if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
+            error!("Error with browse index: {e}");
+        }
+    }
+}
+
 fn reingest_attributes(
     options: &IngestOptions,
     connection: &mut DatabaseConnection,
     ids: &Vec<i64>,
 ) {
-
     let idlen = ids.len();
 
     info!(
         "{:?} processing {} records: {}..{}",
-        thread::current().id(), &ids[0], &ids[idlen - 1], idlen);
+        thread::current().id(),
+        &ids[0],
+        &ids[idlen - 1],
+        idlen
+    );
 
     let has_attr_filter = options.attrs.len() > 0;
 
@@ -203,7 +254,6 @@ fn reingest_attributes(
     let stmt = client.prepare(sql).unwrap();
 
     for id in ids {
-
         let result = match has_attr_filter {
             false => client.query(&stmt, &[id, id]),
             _ => client.query(&stmt, &[id, id, &options.attrs.as_slice()]),
@@ -223,13 +273,12 @@ fn main() {
         None => return,
     };
 
-    connection.connect();
+    connection.connect().unwrap();
 
     let sql = create_sql(&options);
     let mut ids = get_record_ids(&mut connection, &sql);
 
-    // Future DB interactions will be per-thread.
-    connection.disconnect();
+    //connection.disconnect();
 
     ingest_records(&options, &mut connection, &mut ids);
 }

@@ -2,6 +2,7 @@ use egutil::db::DatabaseConnection;
 use getopts::Options;
 use log::{debug, error, info};
 use std::env;
+use std::fs;
 use std::thread;
 use threadpool::ThreadPool;
 
@@ -18,6 +19,7 @@ struct IngestOptions {
     newest_first: bool,
     batch_size: usize,
     attrs: Vec<String>,
+    sql_file: Option<String>,
 }
 
 /// Read command line options and setup our database connection.
@@ -29,6 +31,8 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     opts.optopt("", "db-port", "Database Port", "DB_PORT");
     opts.optopt("", "db-user", "Database User", "DB_USER");
     opts.optopt("", "db-name", "Database Name", "DB_NAME");
+
+    opts.optopt("", "sql-file", "SQL Query File", "QUERY_FILE");
 
     opts.optopt("", "max-threads", "Max Worker Threads", "MAX_THREADS");
     opts.optopt(
@@ -75,6 +79,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
         newest_first: params.opt_present("newest-first"),
         batch_size: params.opt_get_default("batch-size", 100).unwrap(),
         attrs: params.opt_strs("attr"),
+        sql_file: params.opt_get("sql-file").unwrap(),
     };
 
     let mut builder = DatabaseConnection::builder();
@@ -85,6 +90,11 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
 }
 
 fn create_sql(options: &IngestOptions) -> String {
+
+    if let Some(ref fname) = options.sql_file {
+        return fs::read_to_string(fname).unwrap();
+    }
+
     let select = "SELECT id FROM biblio.record_entry";
     let mut filter = format!("WHERE NOT deleted AND id > {}", options.min_id);
 
@@ -136,6 +146,15 @@ fn ingest_records(
         let mut con = connection.partial_clone();
 
         pool.execute(move || process_batch(ops, con, batch));
+
+        if pool.queued_count() > options.batch_size {
+            // Wait for each batch of batches to complete before
+            // moving on to the next.  With this we avoid queueing up
+            // huge numbers of pending threads w/ cloned closure data
+            // consuming lots of memory up front, which can be spread
+            // over time instead.
+            pool.join();
+        }
     }
 
     pool.join();
@@ -148,6 +167,8 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
     if options.do_attrs {
         reingest_attributes(&options, &mut connection, &ids);
     }
+
+    connection.disconnect(); // not strictly necessary
 }
 
 fn reingest_attributes(
@@ -155,11 +176,14 @@ fn reingest_attributes(
     connection: &mut DatabaseConnection,
     ids: &Vec<i64>,
 ) {
+
+    let idlen = ids.len();
+
     info!(
-        "Thread {:?} processing {} records",
-        thread::current().id(),
-        ids.len()
-    );
+        "{:?} processing {} records: {}..{}",
+        thread::current().id(), &ids[0], &ids[idlen - 1], idlen);
+
+    let has_attr_filter = options.attrs.len() > 0;
 
     let mut sql = r#"
         SELECT metabib.reingest_record_attributes($1)
@@ -167,37 +191,26 @@ fn reingest_attributes(
         WHERE id = $2
     "#;
 
-    if options.attrs.len() > 0 {
-
-        let sql = r#"
+    if has_attr_filter {
+        sql = r#"
             SELECT metabib.reingest_record_attributes($1, $3)
             FROM biblio.record_entry
             WHERE id = $2
         "#;
+    }
 
-        let stmt = connection.client().prepare(sql).unwrap();
+    let client = connection.client();
+    let stmt = client.prepare(sql).unwrap();
 
-        for id in ids {
-            if let Err(e) =
-                connection.client().query(&stmt, &[id, id, &options.attrs.as_slice()]) {
-                error!("Error processing record: {id} {e}");
-            }
-        }
+    for id in ids {
 
-    } else {
+        let result = match has_attr_filter {
+            false => client.query(&stmt, &[id, id]),
+            _ => client.query(&stmt, &[id, id, &options.attrs.as_slice()]),
+        };
 
-        let sql = r#"
-            SELECT metabib.reingest_record_attributes($1)
-            FROM biblio.record_entry
-            WHERE id = $2
-        "#;
-
-        let stmt = connection.client().prepare(sql).unwrap();
-
-        for id in ids {
-            if let Err(e) = connection.client().query(&stmt, &[id, id]) {
-                error!("Error processing record: {id} {e}");
-            }
+        if let Err(e) = result {
+            error!("Error processing record: {id} {e}");
         }
     }
 }

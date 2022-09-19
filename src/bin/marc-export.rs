@@ -135,7 +135,6 @@ fn create_sql(ops: &ExportOptions) -> String {
 }
 
 fn export(con: &mut DatabaseConnection, ops: &ExportOptions) -> Result<(), String> {
-
     // Where are we spewing bytes?
     let mut writer: Box<dyn Write> = match &ops.destination {
         ExportDestination::File(fname) => Box::new(fs::File::create(fname).unwrap()),

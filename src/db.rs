@@ -1,7 +1,7 @@
-///! Create, connect, and manage database connections.
-use std::env;
 use getopts;
 use postgres as pg;
+///! Create, connect, and manage database connections.
+use std::env;
 
 const DEFAULT_DB_PORT: u16 = 5432;
 const DEFAULT_DB_HOST: &str = "localhost";
@@ -140,7 +140,9 @@ impl DatabaseConnectionBuilder {
         };
 
         let mut dsn = format!(
-            "host={} port={} user={} dbname={}", host, port, user, database);
+            "host={} port={} user={} dbname={}",
+            host, port, user, database
+        );
 
         if let Some(ref app) = self.application {
             dsn += &format!(" application={}", &app);
@@ -183,6 +185,10 @@ impl DatabaseConnection {
     ///
     /// Panics if the client is not yet connected / created.
     pub fn client(&mut self) -> &mut pg::Client {
+        if self.client.is_none() {
+            panic!("DatabaseConnection is not yet connected!");
+        }
+
         self.client.as_mut().unwrap()
     }
 

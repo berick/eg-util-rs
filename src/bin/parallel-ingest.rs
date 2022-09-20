@@ -15,6 +15,7 @@ struct IngestOptions {
     do_search: bool,
     do_facets: bool,
     do_display: bool,
+    rebuild_rmsr: bool,
     min_id: usize,
     max_id: usize,
     newest_first: bool,
@@ -58,6 +59,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     opts.optflag("", "do-facets", "Update Facets");
     opts.optflag("", "do-display", "Update Display Fields");
     opts.optflag("", "newest-first", "Update Records Newest to Oldest");
+    opts.optflag("", "rebuild-rmsr", "Rebuild Reporter Simple Record");
 
     let params = match opts.parse(&args[1..]) {
         Ok(p) => p,
@@ -83,6 +85,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
         min_id: params.opt_get_default("min-id", 0).unwrap(),
         max_id: params.opt_get_default("max-id", 0).unwrap(),
         newest_first: params.opt_present("newest-first"),
+        rebuild_rmsr: params.opt_present("rebuild-rmsr"),
         batch_size: params.opt_get_default("batch-size", 100).unwrap(),
         attrs: params.opt_strs("attr"),
         sql_file: params.opt_get("sql-file").unwrap(),
@@ -136,9 +139,13 @@ fn ingest_records(
     ids: &mut Vec<i64>,
 ) {
     if options.do_browse {
-        // Browse ingest must be serialized and must be the
-        // only game in town while it's running.
+        // Cannot be run in parallel
         reingest_browse(options, connection, ids);
+    }
+
+    if options.rebuild_rmsr {
+        // Cannot be run in parallel
+        rebuild_rmsr(options, connection, ids);
     }
 
     if !(options.do_attrs || options.do_search || options.do_facets || options.do_display) {
@@ -185,9 +192,9 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
     info!(
         "{:?} processing {} records: {}..{}",
         thread::current().id(),
+        idlen,
         &ids[0],
         &ids[idlen - 1],
-        idlen
     );
 
     connection.connect().unwrap();
@@ -207,6 +214,7 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
 ///
 /// This occurs in the main thread without any parallelification.
 fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
+
     let sql = r#"
 		SELECT metabib.reingest_metabib_field_entries(
 		    bib_id := $1,
@@ -222,6 +230,7 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
 
     let mut counter: usize = 0;
     for id in ids {
+
         if counter % options.batch_size == 0 {
             connection.disconnect();
             connection.connect().unwrap();
@@ -232,7 +241,35 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
         counter += 1;
 
         if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
-            error!("Error with browse index: {e}");
+            error!("Error with browse index for record {id}: {e}");
+        }
+    }
+}
+
+/// Reingest browse data for the full record data set.
+///
+/// This occurs in the main thread without any parallelification.
+fn rebuild_rmsr(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
+
+    let sql = r#"SELECT reporter.simple_rec_update($1)"#;
+
+    // We can't create the statement until we are connected.
+    let mut stmt: Option<pg::Statement> = None;
+
+    let mut counter: usize = 0;
+    for id in ids {
+
+        if counter % options.batch_size == 0 {
+            connection.disconnect();
+            connection.connect().unwrap();
+            stmt = Some(connection.client().prepare(&sql).unwrap());
+            info!("RMSR Rebuild has processed {counter} records");
+        }
+
+        counter += 1;
+
+        if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
+            error!("Error rebuilding RMSR for record {id}: {e}");
         }
     }
 }

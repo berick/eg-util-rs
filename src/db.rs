@@ -20,18 +20,19 @@ pub struct DatabaseConnectionBuilder {
     host: Option<String>,
     port: Option<u16>,
     user: Option<String>,
+    password: Option<String>,
     database: Option<String>,
     // Name of client application.
     application: Option<String>,
 }
 
 impl DatabaseConnectionBuilder {
-
     pub fn new() -> Self {
         DatabaseConnectionBuilder {
             host: None,
             port: None,
             user: None,
+            password: None,
             database: None,
             application: None,
         }
@@ -61,6 +62,12 @@ impl DatabaseConnectionBuilder {
             }
         }
 
+        if self.password.is_none() {
+            if params.opt_defined("db-password") {
+                self.password = params.opt_str("db-password");
+            }
+        }
+
         if self.database.is_none() {
             if params.opt_defined("db-name") {
                 self.database = params.opt_str("db-name");
@@ -86,6 +93,10 @@ impl DatabaseConnectionBuilder {
 
     pub fn set_user(&mut self, user: &str) {
         self.user = Some(user.to_string());
+    }
+
+    pub fn set_password(&mut self, password: &str) {
+        self.password = Some(password.to_string());
     }
 
     pub fn set_database(&mut self, database: &str) {
@@ -143,8 +154,12 @@ impl DatabaseConnectionBuilder {
             host, port, user, database
         );
 
+        if let Some(ref pass) = self.password {
+            dsn += &format!(" password={}", pass);
+        }
+
         if let Some(ref app) = self.application {
-            dsn += &format!(" application={}", &app);
+            dsn += &format!(" application={}", app);
         }
 
         DatabaseConnection {
@@ -153,6 +168,7 @@ impl DatabaseConnectionBuilder {
             user,
             dsn,
             database,
+            password: self.password,
             application: self.application,
             client: None,
         }
@@ -166,18 +182,19 @@ pub struct DatabaseConnection {
     host: String,
     port: u16,
     user: String,
+    password: Option<String>,
     database: String,
     application: Option<String>,
 }
 
 impl DatabaseConnection {
-
     /// Add options to an in-progress getopts::Options related to creating
     /// a database connection.
     pub fn append_options(options: &mut getopts::Options) {
         options.optopt("", "db-host", "Database Host", "DB_HOST");
         options.optopt("", "db-port", "Database Port", "DB_PORT");
         options.optopt("", "db-user", "Database User", "DB_USER");
+        options.optopt("", "db-password", "Database Password", "DB_PASSWORD");
         options.optopt("", "db-name", "Database Name", "DB_NAME");
     }
 
@@ -233,6 +250,10 @@ impl DatabaseConnection {
             port: self.port,
             user: self.user.to_string(),
             database: self.database.to_string(),
+            password: match &self.password {
+                Some(p) => Some(p.to_string()),
+                None => None,
+            },
             application: match &self.application {
                 Some(a) => Some(a.to_string()),
                 None => None,

@@ -152,7 +152,6 @@ fn ingest_records(
     let pool = ThreadPool::new(options.max_threads);
 
     while !ids.is_empty() {
-
         let end = match ids.len() {
             n if n >= options.batch_size => options.batch_size,
             _ => ids.len(),
@@ -181,7 +180,6 @@ fn ingest_records(
 
 /// Start point for our threads
 fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids: Vec<i64>) {
-
     let idlen = ids.len();
 
     info!(
@@ -209,7 +207,6 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
 ///
 /// This occurs in the main thread without any parallelification.
 fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
-
     let sql = r#"
 		SELECT metabib.reingest_metabib_field_entries(
 		    bib_id := $1,
@@ -225,7 +222,6 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
 
     let mut counter: usize = 0;
     for id in ids {
-
         if counter % options.batch_size == 0 {
             connection.disconnect();
             connection.connect().unwrap();
@@ -245,7 +241,6 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
 ///
 /// This occurs in the main thread without any parallelification.
 fn rebuild_rmsr(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
-
     let sql = r#"SELECT reporter.simple_rec_update($1)"#;
 
     // We can't create the statement until we are connected.
@@ -253,7 +248,6 @@ fn rebuild_rmsr(options: &IngestOptions, connection: &mut DatabaseConnection, id
 
     let mut counter: usize = 0;
     for id in ids {
-
         if counter % options.batch_size == 0 {
             connection.disconnect();
             connection.connect().unwrap();
@@ -274,7 +268,6 @@ fn reingest_field_entries(
     connection: &mut DatabaseConnection,
     ids: &Vec<i64>,
 ) {
-
     debug!("Batch starting reingest_field_entries()");
 
     let sql = r#"
@@ -290,13 +283,19 @@ fn reingest_field_entries(
     let stmt = connection.client().prepare(&sql).unwrap();
 
     for id in ids {
-        if let Err(e) = connection.client().query(&stmt,
-            &[id, &!options.do_facets, &!options.do_search, &!options.do_display]) {
+        if let Err(e) = connection.client().query(
+            &stmt,
+            &[
+                id,
+                &!options.do_facets,
+                &!options.do_search,
+                &!options.do_display,
+            ],
+        ) {
             error!("Error processing record: {id} {e}");
         }
     }
 }
-
 
 fn reingest_attributes(
     options: &IngestOptions,

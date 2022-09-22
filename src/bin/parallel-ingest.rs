@@ -143,7 +143,13 @@ fn ingest_records(
         rebuild_rmsr(options, connection, ids);
     }
 
-    if !(options.do_attrs || options.do_search || options.do_facets || options.do_display) {
+    if options.do_search {
+        // Cannot currently be run in parallel.
+        // https://bugs.launchpad.net/evergreen/+bug/1931737
+        do_search(options, connection, ids);
+    }
+
+    if !(options.do_attrs || options.do_facets || options.do_display) {
         return;
     }
 
@@ -196,11 +202,38 @@ fn process_batch(options: IngestOptions, mut connection: DatabaseConnection, ids
         reingest_attributes(&options, &mut connection, &ids);
     }
 
-    if options.do_search || options.do_facets || options.do_display {
+    if options.do_facets || options.do_display {
         reingest_field_entries(&options, &mut connection, &ids);
     }
 
     connection.disconnect(); // not strictly necessary
+}
+
+/// Execute the provided SQL on all records, chopped into batches.
+fn run_serialized_updates(
+    options: &IngestOptions,
+    connection: &mut DatabaseConnection,
+    ids: &Vec<i64>,
+    sql: &str,
+) {
+    // We can't create the statement until we are connected.
+    let mut stmt: Option<pg::Statement> = None;
+
+    let mut counter: usize = 0;
+    for id in ids {
+        if counter % options.batch_size == 0 {
+            connection.disconnect();
+            connection.connect().unwrap();
+            stmt = Some(connection.client().prepare(sql).unwrap());
+            info!("Browse has processed {counter} records");
+        }
+
+        counter += 1;
+
+        if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
+            error!("Error with browse index for record {id}: {e}");
+        }
+    }
 }
 
 /// Reingest browse data for the full record data set.
@@ -217,24 +250,23 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
         )
 	"#;
 
-    // We can't create the statement until we are connected.
-    let mut stmt: Option<pg::Statement> = None;
+    run_serialized_updates(options, connection, ids, sql);
+}
 
-    let mut counter: usize = 0;
-    for id in ids {
-        if counter % options.batch_size == 0 {
-            connection.disconnect();
-            connection.connect().unwrap();
-            stmt = Some(connection.client().prepare(&sql).unwrap());
-            info!("Browse has processed {counter} records");
-        }
+fn do_search(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
+    debug!("Batch starting do_search()");
 
-        counter += 1;
+    let sql = r#"
+        SELECT metabib.reingest_metabib_field_entries(
+            bib_id := $1,
+            skip_facet := TRUE,
+            skip_browse := TRUE,
+            skip_search := FALSE,
+            skip_display := TRUE
+        )
+    "#;
 
-        if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
-            error!("Error with browse index for record {id}: {e}");
-        }
-    }
+    run_serialized_updates(options, connection, ids, sql);
 }
 
 /// Reingest browse data for the full record data set.
@@ -243,24 +275,7 @@ fn reingest_browse(options: &IngestOptions, connection: &mut DatabaseConnection,
 fn rebuild_rmsr(options: &IngestOptions, connection: &mut DatabaseConnection, ids: &Vec<i64>) {
     let sql = r#"SELECT reporter.simple_rec_update($1)"#;
 
-    // We can't create the statement until we are connected.
-    let mut stmt: Option<pg::Statement> = None;
-
-    let mut counter: usize = 0;
-    for id in ids {
-        if counter % options.batch_size == 0 {
-            connection.disconnect();
-            connection.connect().unwrap();
-            stmt = Some(connection.client().prepare(&sql).unwrap());
-            info!("RMSR Rebuild has processed {counter} records");
-        }
-
-        counter += 1;
-
-        if let Err(e) = connection.client().query(stmt.as_ref().unwrap(), &[id]) {
-            error!("Error rebuilding RMSR for record {id}: {e}");
-        }
-    }
+    run_serialized_updates(options, connection, ids, sql);
 }
 
 fn reingest_field_entries(
@@ -275,7 +290,7 @@ fn reingest_field_entries(
             bib_id := $1,
             skip_facet := $2,
             skip_browse := TRUE,
-            skip_search := $3,
+            skip_search := TRUE,
             skip_display := $4
         )
     "#;
@@ -283,15 +298,10 @@ fn reingest_field_entries(
     let stmt = connection.client().prepare(&sql).unwrap();
 
     for id in ids {
-        if let Err(e) = connection.client().query(
-            &stmt,
-            &[
-                id,
-                &!options.do_facets,
-                &!options.do_search,
-                &!options.do_display,
-            ],
-        ) {
+        if let Err(e) = connection
+            .client()
+            .query(&stmt, &[id, &!options.do_facets, &!options.do_display])
+        {
             error!("Error processing record: {id} {e}");
         }
     }

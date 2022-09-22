@@ -29,11 +29,6 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     let args: Vec<String> = env::args().collect();
     let mut opts = Options::new();
 
-    opts.optopt("", "db-host", "Database Host", "DB_HOST");
-    opts.optopt("", "db-port", "Database Port", "DB_PORT");
-    opts.optopt("", "db-user", "Database User", "DB_USER");
-    opts.optopt("", "db-name", "Database Name", "DB_NAME");
-
     opts.optopt("", "sql-file", "SQL Query File", "QUERY_FILE");
 
     opts.optopt("", "max-threads", "Max Worker Threads", "MAX_THREADS");
@@ -60,6 +55,8 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
     opts.optflag("", "do-display", "Update Display Fields");
     opts.optflag("", "newest-first", "Update Records Newest to Oldest");
     opts.optflag("", "rebuild-rmsr", "Rebuild Reporter Simple Record");
+
+    DatabaseConnection::append_options(&mut opts);
 
     let params = match opts.parse(&args[1..]) {
         Ok(p) => p,

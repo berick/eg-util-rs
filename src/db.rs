@@ -26,6 +26,7 @@ pub struct DatabaseConnectionBuilder {
 }
 
 impl DatabaseConnectionBuilder {
+
     pub fn new() -> Self {
         DatabaseConnectionBuilder {
             host: None,
@@ -170,6 +171,15 @@ pub struct DatabaseConnection {
 }
 
 impl DatabaseConnection {
+
+    /// Add options to an in-progress getopts::Options related to creating
+    /// a database connection.
+    pub fn append_options(options: &mut getopts::Options) {
+        options.optopt("", "db-host", "Database Host", "DB_HOST");
+        options.optopt("", "db-port", "Database Port", "DB_PORT");
+        options.optopt("", "db-user", "Database User", "DB_USER");
+        options.optopt("", "db-name", "Database Name", "DB_NAME");
+    }
 
     pub fn builder() -> DatabaseConnectionBuilder {
         DatabaseConnectionBuilder::new()

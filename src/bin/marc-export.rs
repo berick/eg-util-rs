@@ -25,11 +25,6 @@ fn read_options() -> Option<(ExportOptions, DatabaseConnection)> {
     let args: Vec<String> = env::args().collect();
     let mut opts = getopts::Options::new();
 
-    opts.optopt("", "db-host", "Database Host", "DB_HOST");
-    opts.optopt("", "db-port", "Database Port", "DB_PORT");
-    opts.optopt("", "db-user", "Database User", "DB_USER");
-    opts.optopt("", "db-name", "Database Name", "DB_NAME");
-
     opts.optopt("", "min-id", "Minimum record ID", "MIN_REC_ID");
     opts.optopt("", "max-id", "Maximum record ID", "MAX_REC_ID");
     opts.optopt("", "out-file", "Output File", "OUTPUT_FILE");
@@ -38,6 +33,8 @@ fn read_options() -> Option<(ExportOptions, DatabaseConnection)> {
     opts.optflag("", "to-xml", "Export to XML");
     opts.optflag("", "newest-first", "Newest First");
     opts.optflag("h", "help", "Help");
+
+    DatabaseConnection::append_options(&mut opts);
 
     let params = opts.parse(&args[1..]).unwrap();
 

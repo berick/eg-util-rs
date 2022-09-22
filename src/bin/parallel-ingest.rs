@@ -91,9 +91,7 @@ fn init() -> Option<(IngestOptions, DatabaseConnection)> {
         sql_file: params.opt_get("sql-file").unwrap(),
     };
 
-    let mut builder = DatabaseConnection::builder();
-    builder.set_opts(&params);
-    let connection = builder.build();
+    let connection = DatabaseConnection::new_from_options(&params);
 
     Some((ingest_ops, connection))
 }

@@ -51,9 +51,7 @@ fn read_options() -> Option<(ExportOptions, DatabaseConnection)> {
         None => ExportDestination::Stdout,
     };
 
-    let mut builder = DatabaseConnection::builder();
-    builder.set_opts(&params);
-    let connection = builder.build();
+    let connection = DatabaseConnection::new_from_options(&params);
 
     Some((
         ExportOptions {

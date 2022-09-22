@@ -170,8 +170,15 @@ pub struct DatabaseConnection {
 }
 
 impl DatabaseConnection {
+
     pub fn builder() -> DatabaseConnectionBuilder {
         DatabaseConnectionBuilder::new()
+    }
+
+    pub fn new_from_options(params: &getopts::Matches) -> Self {
+        let mut builder = DatabaseConnectionBuilder::new();
+        builder.set_opts(&params);
+        builder.build()
     }
 
     /// Our connection string

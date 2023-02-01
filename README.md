@@ -1,17 +1,3 @@
-# Evergreen Utilities in Rust
+# Evergreen Rust Utilities
 
-## Getting Started (Ubuntu)
-
-```sh
-sudo apt install rust-all
-```
-
-## MARC Export
-
-Export MARC records as binary or XML files.
-
-
-```sh
-cargo run --bin marc-export -- --help
-```
-
+Project moved to [KCLS Evergreen Universe Rust Repository](https://github.com/kcls/evergreen-universe-rs)
